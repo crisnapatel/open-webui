@@ -244,6 +244,7 @@ type Config = {
 	default_locale: string;
 	default_models: string;
 	default_prompt_suggestions: PromptSuggestion[];
+	user_count?: number;
 	features: {
 		auth: boolean;
 		auth_trusted_header: boolean;
@@ -266,9 +267,43 @@ type Config = {
 			[key: string]: string;
 		};
 	};
+	code?: {
+		engine?: string | null;
+	};
+	audio?: {
+		tts?: {
+			engine?: string | null;
+			voice?: string | null;
+			split_on?: string | null;
+		};
+		stt?: {
+			engine?: string | null;
+		};
+	};
+	file?: {
+		max_size?: number | null;
+		max_count?: number | null;
+		allowed_extensions?: string[];
+		image_compression?: {
+			width?: number | null;
+			height?: number | null;
+		};
+	};
+	permissions?: Record<string, unknown>;
+	google_drive?: {
+		client_id?: string;
+		api_key?: string;
+	};
+	onedrive?: {
+		client_id?: string;
+		sharepoint_url?: string;
+		sharepoint_tenant_id?: string;
+	};
 	ui?: {
 		pending_user_overlay_title?: string;
 		pending_user_overlay_description?: string;
+		pending_user_overlay_content?: string;
+		response_watermark?: string;
 	};
 };
 
