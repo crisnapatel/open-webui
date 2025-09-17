@@ -4,7 +4,7 @@ import uuid
 import json
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 from urllib.parse import quote
 import asyncio
 
@@ -46,6 +46,42 @@ log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["MODELS"])
 
 router = APIRouter()
+
+
+def _normalize_allowed_extensions(
+    extensions: Optional[Sequence[str]],
+) -> list[str]:
+    if not extensions:
+        return []
+
+    normalized_extensions: list[str] = []
+
+    for ext in extensions:
+        if ext is None:
+            continue
+
+        ext_str = str(ext)
+
+        if not ext_str:
+            continue
+
+        normalized_extensions.append(ext_str.lower())
+
+    return normalized_extensions
+
+
+def _validate_file_extension(
+    file_extension: str, allowed_extensions: Optional[Sequence[str]]
+) -> None:
+    normalized_allowed_extensions = _normalize_allowed_extensions(allowed_extensions)
+
+    if normalized_allowed_extensions and (file_extension or "").lower() not in normalized_allowed_extensions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ERROR_MESSAGES.DEFAULT(
+                f"File type {file_extension} is not allowed"
+            ),
+        )
 
 
 ############################
@@ -186,18 +222,12 @@ def upload_file_handler(
         # Remove the leading dot from the file extension
         file_extension = file_extension[1:] if file_extension else ""
 
-        if process and request.app.state.config.ALLOWED_FILE_EXTENSIONS:
-            request.app.state.config.ALLOWED_FILE_EXTENSIONS = [
-                ext for ext in request.app.state.config.ALLOWED_FILE_EXTENSIONS if ext
-            ]
+        allowed_extensions = getattr(
+            request.app.state.config, "ALLOWED_FILE_EXTENSIONS", None
+        )
 
-            if file_extension not in request.app.state.config.ALLOWED_FILE_EXTENSIONS:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=ERROR_MESSAGES.DEFAULT(
-                        f"File type {file_extension} is not allowed"
-                    ),
-                )
+        if process:
+            _validate_file_extension(file_extension, allowed_extensions)
 
         # replace filename with uuid
         id = str(uuid.uuid4())
