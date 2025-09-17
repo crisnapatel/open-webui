@@ -111,26 +111,97 @@
 		selectedFile = null;
 	}
 
-	let fuse = null;
-	let debounceTimeout = null;
-	let mediaQuery;
-	let dragged = false;
-	let isSaving = false;
+        let fuse = null;
+        let debounceTimeout = null;
+        let mediaQuery;
+        let dragged = false;
+        let isSaving = false;
 
-	const createFileFromText = (name, content) => {
-		const blob = new Blob([content], { type: 'text/plain' });
-		const file = blobToFile(blob, `${name}.txt`);
+        const normalizeExtension = (extension: unknown) => {
+                if (typeof extension !== 'string') {
+                        return '';
+                }
+
+                const trimmed = extension.trim().toLowerCase();
+                if (trimmed === '*') {
+                        return '*';
+                }
+
+                return trimmed.replace(/^\.+/, '');
+        };
+
+        const getFileExtensionVariants = (fileName: string) => {
+                if (!fileName) {
+                        return [];
+                }
+
+                const normalizedPath = fileName.toLowerCase();
+                const baseName = normalizedPath.split(/[\\/]/).pop() ?? normalizedPath;
+                const relevantParts = baseName.split('.').slice(1).filter((part) => part.length > 0);
+
+                if (relevantParts.length === 0) {
+                        return [];
+                }
+
+                const variants: string[] = [];
+
+                for (let i = 0; i < relevantParts.length; i++) {
+                        const variant = relevantParts.slice(i).join('.');
+                        if (variant.length > 0) {
+                                variants.push(variant);
+                        }
+                }
+
+                return variants;
+        };
+
+        let allowedFileExtensions: Set<string> = new Set();
+
+        $: allowedFileExtensions = new Set(
+                Array.isArray($config?.file?.allowed_extensions)
+                        ? $config.file.allowed_extensions
+                                  .map((extension) => normalizeExtension(extension))
+                                  .filter((extension) => extension.length > 0)
+                        : []
+        );
+
+        const isFileExtensionAllowed = (fileName: string) => {
+                if (allowedFileExtensions.size === 0 || allowedFileExtensions.has('*')) {
+                        return true;
+                }
+
+                const variants = getFileExtensionVariants(fileName);
+                if (variants.length === 0) {
+                        return false;
+                }
+
+                return variants.some((variant) => allowedFileExtensions.has(variant));
+        };
+
+        const notifyDisallowedExtension = (fileName: string) => {
+                const suffix = fileName ? ` (${fileName})` : '';
+                toast.error(`${$i18n.t('File type not allowed.')}${suffix}`);
+        };
+
+        const createFileFromText = (name, content) => {
+                const blob = new Blob([content], { type: 'text/plain' });
+                const file = blobToFile(blob, `${name}.txt`);
 
 		console.log(file);
 		return file;
 	};
 
-	const uploadFileHandler = async (file) => {
-		console.log(file);
+        const uploadFileHandler = async (file) => {
+                if (!isFileExtensionAllowed(file?.name ?? '')) {
+                        notifyDisallowedExtension(file?.name ?? '');
+                        return null;
+                }
 
-		const tempItemId = uuidv4();
-		const fileItem = {
-			type: 'file',
+                console.log(file);
+
+                const tempItemId = uuidv4();
+                const fileItem = {
+                        type: 'file',
 			file: '',
 			id: null,
 			url: '',
@@ -248,21 +319,27 @@
 		};
 
 		// Recursive function to count all files excluding hidden ones
-		async function countFiles(dirHandle) {
-			for await (const entry of dirHandle.values()) {
-				// Skip hidden files and directories
-				if (entry.name.startsWith('.')) continue;
+                async function countFiles(dirHandle, path = '') {
+                        for await (const entry of dirHandle.values()) {
+                                // Skip hidden files and directories
+                                if (entry.name.startsWith('.')) continue;
 
-				if (entry.kind === 'file') {
-					totalFiles++;
-				} else if (entry.kind === 'directory') {
-					// Only process non-hidden directories
-					if (!entry.name.startsWith('.')) {
-						await countFiles(entry);
-					}
-				}
-			}
-		}
+                                const entryPath = path ? `${path}/${entry.name}` : entry.name;
+
+                                if (hasHiddenFolder(entryPath)) continue;
+
+                                if (entry.kind === 'file') {
+                                        if (isFileExtensionAllowed(entryPath)) {
+                                                totalFiles++;
+                                        }
+                                } else if (entry.kind === 'directory') {
+                                        // Only process non-hidden directories
+                                        if (!entry.name.startsWith('.')) {
+                                                await countFiles(entry, entryPath);
+                                        }
+                                }
+                        }
+                }
 
 		// Recursive function to process directories excluding hidden files and folders
 		async function processDirectory(dirHandle, path = '') {
@@ -270,17 +347,22 @@
 				// Skip hidden files and directories
 				if (entry.name.startsWith('.')) continue;
 
-				const entryPath = path ? `${path}/${entry.name}` : entry.name;
+                                const entryPath = path ? `${path}/${entry.name}` : entry.name;
 
-				// Skip if the path contains any hidden folders
-				if (hasHiddenFolder(entryPath)) continue;
+                                // Skip if the path contains any hidden folders
+                                if (hasHiddenFolder(entryPath)) continue;
 
-				if (entry.kind === 'file') {
-					const file = await entry.getFile();
-					const fileWithPath = new File([file], entryPath, { type: file.type });
+                                if (entry.kind === 'file') {
+                                        if (!isFileExtensionAllowed(entryPath)) {
+                                                notifyDisallowedExtension(entryPath);
+                                                continue;
+                                        }
 
-					await uploadFileHandler(fileWithPath);
-					uploadedFiles++;
+                                        const file = await entry.getFile();
+                                        const fileWithPath = new File([file], entryPath, { type: file.type });
+
+                                        await uploadFileHandler(fileWithPath);
+                                        uploadedFiles++;
 					updateProgress();
 				} else if (entry.kind === 'directory') {
 					// Only process non-hidden directories
@@ -316,17 +398,34 @@
 			document.body.appendChild(input);
 
 			input.onchange = async () => {
-				try {
-					const files = Array.from(input.files)
-						// Filter out files from hidden folders
-						.filter((file) => !hasHiddenFolder(file.webkitRelativePath));
+                                try {
+                                        const visibleFiles = Array.from(input.files)
+                                                // Filter out files from hidden folders
+                                                .filter((file) => !hasHiddenFolder(file.webkitRelativePath));
 
-					let totalFiles = files.length;
-					let uploadedFiles = 0;
+                                        const allowedFiles = visibleFiles.filter((file) =>
+                                                isFileExtensionAllowed(file.webkitRelativePath || file.name)
+                                        );
 
-					// Function to update the UI with the progress
-					const updateProgress = () => {
-						const percentage = (uploadedFiles / totalFiles) * 100;
+                                        visibleFiles
+                                                .filter(
+                                                        (file) =>
+                                                                !isFileExtensionAllowed(
+                                                                        file.webkitRelativePath || file.name
+                                                                )
+                                                )
+                                                .forEach((file) =>
+                                                        notifyDisallowedExtension(
+                                                                file.webkitRelativePath || file.name
+                                                        )
+                                                );
+
+                                        let totalFiles = allowedFiles.length;
+                                        let uploadedFiles = 0;
+
+                                        // Function to update the UI with the progress
+                                        const updateProgress = () => {
+                                                const percentage = (uploadedFiles / totalFiles) * 100;
 						toast.info(
 							$i18n.t('Upload Progress: {{uploadedFiles}}/{{totalFiles}} ({{percentage}}%)', {
 								uploadedFiles: uploadedFiles,
@@ -339,11 +438,11 @@
 					updateProgress();
 
 					// Process all files
-					for (const file of files) {
-						// Skip hidden files (additional check)
-						if (!file.name.startsWith('.')) {
-							const relativePath = file.webkitRelativePath || file.name;
-							const fileWithPath = new File([file], relativePath, { type: file.type });
+                                        for (const file of allowedFiles) {
+                                                // Skip hidden files (additional check)
+                                                if (!file.name.startsWith('.')) {
+                                                        const relativePath = file.webkitRelativePath || file.name;
+                                                        const fileWithPath = new File([file], relativePath, { type: file.type });
 
 							await uploadFileHandler(fileWithPath);
 							uploadedFiles++;
